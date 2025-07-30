@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>p5.js + Tone.js Timeline</title>
+
+  <!-- p5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+  <!-- Tone.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+<script>
+  // Core variables
+  let chordBlocks = [];
+  let paletteBlocks = [];
+  let draggingBlock = null;
+  let resizingBlock = null;
+  let resizingSide = null;
+  let offsetX = 0, offsetY = 0;
+  let isDraggingPalette = false;
+
+  // Grid and layout
+  const gridStartX = 240;
+  const gridSpacing = 80;
+  const snapStep = 40;
+  const timelineY = 80;
+  const minGridUnits = 1;
+  const resizeMargin = 10;
+
+  // Playback
+  let isPlaying = false;
+  let playIndex = 0;
+  let playTimer = 0;
+  let framesPerBeat = 30;
+  let sortedChordBlocks = [];
+
+  function setup() {
+    createCanvas(1200, 600);
+
+    chordBlocks.push(new ChordBlock(240, timelineY, "Cm", "i", color(30), 2));
+    chordBlocks.push(new ChordBlock(400, timelineY, "G7", "V7/i", color(70, 120, 255), 1));
+
+    paletteBlocks.push(new ChordBlock(100, 480, "Ab", "VI", color(90, 60, 120), 1));
+    paletteBlocks.push(new ChordBlock(280, 480, "Bb", "VII", color(60, 100, 160), 1));
+    paletteBlocks.push(new ChordBlock(460, 480, "Fm", "iv", color(100, 160, 100), 1));
+  }
+
+  function draw() {
+    background(20);
+    drawUI();
+
+    if (isPlaying && playIndex < sortedChordBlocks.length) {
+      let currentBlock = sortedChordBlocks[playIndex];
+      let beats = (currentBlock.w / snapStep) * framesPerBeat;
+
+      if (frameCount - playTimer > beats) {
+        playIndex++;
+        playTimer = frameCount;
+        if (playIndex >= sortedChordBlocks.length) {
+          isPlaying = false;
+          playIndex = 0;
+        }
+      }
+    }
+  }
+
+  function drawUI() {
+    noStroke();
+    fill(40);
+    rect(0, 0, width, 50);
+    fill(255);
+    textSize(16);
+    text("Verse", 20, 35);
+
+    drawPlayButton(100, 15, 60, 25);
+
+    fill(60);
+    rect(20, 80, 200, 60);
+    fill(255);
+    textSize(14);
+    text("Chord Progression", 90, 110);
+
+    for (let block of chordBlocks) {
+      const isActive =
+        isPlaying &&
+        sortedChordBlocks[playIndex] &&
+        sortedChordBlocks[playIndex] === block;
+      block.display(isActive);
+    }
+
+    drawTimeline(gridStartX, 60, 32);
+
+    fill(30);
+    rect(0, 450, width, 150);
+    fill(200);
+    textSize(18);
+    text("AI Suggestions", 80, 465);
+    fill(255);
+    textSize(16);
+    text("120 BPM", 50, 500);
+
+    for (let block of paletteBlocks) {
+      block.display(false);
+    }
+
+    if (draggingBlock && isDraggingPalette) {
+      draggingBlock.display(false);
+    }
+  }
+
+  function drawTimeline(startX, y, steps) {
+    stroke(255);
+    strokeWeight(1);
+    for (let i = 0; i < steps; i++) {
+      let x = startX + i * snapStep;
+      line(x, y, x, y - 10);
+      noStroke();
+      fill(255);
+      if (i % 2 === 0) text(i / 2 + 1, x, y - 15);
+      stroke(255);
+    }
+  }
+
+  function drawPlayButton(x, y, w, h) {
+    fill(80);
+    rect(x, y, w, h, 5);
+    fill(255);
+    textSize(14);
+    textAlign(CENTER, CENTER);
+    text(isPlaying ? "Stop" : "Play", x + w / 2, y + h / 2);
+  }
+
+  class ChordBlock {
+    constructor(x, y, chord, numeral, col, lengthInGrids = 1) {
+      this.x = x;
+      this.y = y;
+      this.w = gridSpacing * lengthInGrids;
+      this.h = 60;
+      this.chord = chord;
+      this.numeral = numeral;
+      this.col = col;
+    }
+
+    display(isGlowing = false) {
+      if (isGlowing) {
+        let glow = sin(frameCount * 0.3) * 50 + 200;
+        stroke(255, glow);
+        strokeWeight(4);
+      } else {
+        noStroke();
+      }
+
+      fill(this.col);
+      rect(this.x, this.y, this.w, this.h, 10);
+
+      fill(255, 180);
+      rect(this.x, this.y, resizeMargin, this.h);
+      rect(this.x + this.w - resizeMargin, this.y, resizeMargin, this.h);
+
+      fill(255);
+      noStroke();
+      textSize(20);
+      textAlign(CENTER, CENTER);
+      text(this.chord, this.x + this.w / 2, this.y + 20);
+      textSize(14);
+      text(this.numeral, this.x + this.w / 2, this.y + 45);
+    }
+
+    isMouseInside() {
+      return mouseX > this.x && mouseX < this.x + this.w &&
+             mouseY > this.y && mouseY < this.y + this.h;
+    }
+
+    isMouseOnLeftEdge() {
+      return mouseX > this.x && mouseX < this.x + resizeMargin &&
+             mouseY > this.y && mouseY < this.y + this.h;
+    }
+
+    isMouseOnRightEdge() {
+      return mouseX > this.x + this.w - resizeMargin &&
+             mouseX < this.x + this.w &&
+             mouseY > this.y && mouseY < this.y + this.h;
+    }
+
+    cloneAt(x, y) {
+      let units = this.w / snapStep;
+      return new ChordBlock(x, y, this.chord, this.numeral, this.col, units * snapStep / gridSpacing);
+    }
+
+    snapToGrid() {
+      this.x = round((this.x - gridStartX) / snapStep) * snapStep + gridStartX;
+      this.w = round(this.w / snapStep) * snapStep;
+      this.w = max(this.w, minGridUnits * snapStep);
+    }
+  }
+
+  function isOverlapping(a, b) {
+    return !(a.x + a.w <= b.x || a.x >= b.x + b.w);
+  }
+
+  function mousePressed() {
+    // Play button
+    if (mouseX > 100 && mouseX < 160 && mouseY > 15 && mouseY < 40) {
+      if (!isPlaying) {
+        sortedChordBlocks = chordBlocks
+          .filter(b => b.y === timelineY)
+          .slice()
+          .sort((a, b) => a.x - b.x);
+        playIndex = 0;
+        playTimer = frameCount;
+        isPlaying = true;
+      } else {
+        isPlaying = false;
+        playIndex = 0;
+      }
+      return;
+    }
+
+    for (let block of chordBlocks) {
+      if (block.isMouseOnLeftEdge()) {
+        resizingBlock = block;
+        resizingSide = "left";
+        return;
+      }
+      if (block.isMouseOnRightEdge()) {
+        resizingBlock = block;
+        resizingSide = "right";
+        return;
+      }
+    }
+
+    for (let block of paletteBlocks) {
+      if (block.isMouseInside()) {
+        draggingBlock = block.cloneAt(block.x, block.y);
+        isDraggingPalette = true;
+        offsetX = mouseX - block.x;
+        offsetY = mouseY - block.y;
+        return;
+      }
+    }
+
+    for (let block of chordBlocks) {
+      if (block.isMouseInside()) {
+        draggingBlock = block;
+        isDraggingPalette = false;
+        offsetX = mouseX - block.x;
+        offsetY = mouseY - block.y;
+        draggingBlock.originalX = block.x;
+        draggingBlock.originalY = block.y;
+        return;
+      }
+    }
+  }
+
+  function mouseDragged() {
+    if (resizingBlock) {
+      if (resizingSide === "right") {
+        let newW = mouseX - resizingBlock.x;
+        resizingBlock.w = max(round(newW / snapStep) * snapStep, snapStep * minGridUnits);
+      } else if (resizingSide === "left") {
+        let oldRight = resizingBlock.x + resizingBlock.w;
+        let newX = round((mouseX - gridStartX) / snapStep) * snapStep + gridStartX;
+        newX = min(newX, oldRight - snapStep * minGridUnits);
+        let newW = oldRight - newX;
+        resizingBlock.x = newX;
+        resizingBlock.w = newW;
+      }
+      return;
+    }
+
+    if (!draggingBlock) return;
+
+    if (isDraggingPalette) {
+      draggingBlock.x = mouseX - offsetX;
+      draggingBlock.y = mouseY - offsetY;
+      return;
+    }
+
+    let snappedX = round((mouseX - offsetX - gridStartX) / snapStep) * snapStep + gridStartX;
+    snappedX = constrain(snappedX, gridStartX, width - draggingBlock.w);
+    draggingBlock.x = snappedX;
+    draggingBlock.y = timelineY;
+  }
+
+  function mouseReleased() {
+    if (resizingBlock) {
+      resizingBlock.snapToGrid();
+      resizingBlock = null;
+      resizingSide = null;
+      return;
+    }
+
+    if (!draggingBlock) return;
+
+    draggingBlock.snapToGrid();
+
+    let hasOverlap = chordBlocks.some(block => {
+      return block !== draggingBlock &&
+             block.y === timelineY &&
+             isOverlapping(block, draggingBlock);
+    });
+
+    if (hasOverlap) {
+      if (!isDraggingPalette) {
+        draggingBlock.x = draggingBlock.originalX;
+        draggingBlock.y = draggingBlock.originalY;
+      }
+    } else {
+      if (isDraggingPalette && draggingBlock.y < 450) {
+        draggingBlock.y = timelineY;
+        chordBlocks.push(draggingBlock);
+      }
+    }
+
+    draggingBlock = null;
+    isDraggingPalette = false;
+  }
+
+  function doubleClicked() {
+    for (let i = chordBlocks.length - 1; i >= 0; i--) {
+      if (chordBlocks[i].isMouseInside()) {
+        chordBlocks.splice(i, 1);
+        break;
+      }
+    }
+  }
+</script>
+
+</body>
+</html>
