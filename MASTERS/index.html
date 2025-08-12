@@ -1,18 +1,4 @@
-function drawTimeline(startX, y, steps) {
-  stroke(100);
-  strokeWeight(1);
-  for (let i = 0; i < steps; i++) {
-    let x = startX + i * snapStep;
-    line(x, y, x, y - 10);
-    noStroke();
-    fill(150);
-    textAlign(CENTER, BASELINE);
-    textSize(10);
-    if (i % 2 === 0) text((i / 2 + 1), x, y - 15);
-    stroke(100);
-  }
-  noStroke();
-}<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
