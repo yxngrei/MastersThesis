@@ -1,6 +1,8 @@
 Flask==2.3.2
 flask-cors==4.0.0
 numpy<2
+scipy<1.12
 gensim==3.8.0
 gunicorn==21.2.0
+
 
