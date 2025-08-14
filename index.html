@@ -5,13 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>p5.js + Tone.js + PapaParse CSV Chords</title>
 
-  <!-- p5.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-
-  <!-- Tone.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
-
-  <!-- PapaParse -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
   <style>
@@ -23,9 +18,7 @@
       color: #fff;
       font-family: sans-serif;
     }
-    canvas {
-      display: block;
-    }
+    canvas { display: block; }
     #fileInput {
       position: absolute;
       top: 10px;
@@ -46,7 +39,7 @@
 <script>
 let chordBlocks = [];
 let paletteBlocks = [];
-let allChordSuggestions = []; // Store all loaded chords
+let allChordSuggestions = [];
 let currentPage = 0;
 let chordsPerPage = 8;
 let draggingBlock = null;
@@ -63,25 +56,19 @@ const minGridUnits = 1;
 const resizeMargin = 10;
 
 let isPlaying = false;
-let playIndex = 0;
-let playTimer = 0;
-let framesPerBeat = 30;
 let sortedChordBlocks = [];
-
-// Highlight chord playing
 let highlightedBlock = null;
 let lastHighlightedBlock = null;
+let currentPlayIndex = -1; // For highlighting active chord during Transport playback
 
 const synth = new Tone.PolySynth(Tone.Synth).toDestination();
 
 function setup() {
   createCanvas(1920, 1080);
 
-  // Add some default chord blocks for testing
   chordBlocks.push(new ChordBlock(gridStartX, timelineY, "C", "I", color(100, 150, 255), 2, ["C4", "E4", "G4"]));
   chordBlocks.push(new ChordBlock(gridStartX + 160, timelineY, "Am", "vi", color(255, 100, 150), 1, ["A4", "C5", "E5"]));
 
-  // File picker event
   document.getElementById("fileInput").addEventListener("change", function(evt) {
     let file = evt.target.files[0];
     if (!file) return;
@@ -90,27 +77,21 @@ function setup() {
       skipEmptyLines: true,
       dynamicTyping: false,
       complete: function(results) {
-        console.log("CSV parsed successfully:", results.data.length, "rows");
-        allChordSuggestions = []; // clear old data
+        allChordSuggestions = [];
         buildChordSuggestionsFromCSV(results.data);
-        currentPage = 0; // Reset to first page
+        currentPage = 0;
         updatePaletteDisplay();
-        console.log("Created", allChordSuggestions.length, "total chord suggestions");
-      },
-      error: function(error) {
-        console.error("Error parsing CSV:", error);
       }
     });
   });
 
-  // Add some default palette blocks for testing (will be replaced when CSV is loaded)
   allChordSuggestions.push(
     { chord: "G", numeral: "V", color: color(255, 200, 100), notes: ["G4", "B4", "D5"] },
     { chord: "Dm", numeral: "ii", color: color(200, 100, 255), notes: ["D4", "F4", "A4"] },
     { chord: "Em", numeral: "iii", color: color(100, 255, 200), notes: ["E4", "G4", "B4"] },
     { chord: "F", numeral: "IV", color: color(255, 150, 100), notes: ["F4", "A4", "C5"] },
     { chord: "Am7", numeral: "vi7", color: color(150, 255, 150), notes: ["A4", "C5", "E5", "G5"] },
-    { chord: "Bâ™­", numeral: "â™­VII", color: color(255, 100, 255), notes: ["Bb4", "D5", "F5"] },
+    { chord: "Bb", numeral: "♭VII", color: color(255, 100, 255), notes: ["Bb4", "D5", "F5"] },
     { chord: "Cm", numeral: "i", color: color(100, 200, 255), notes: ["C4", "Eb4", "G4"] },
     { chord: "D7", numeral: "V7/V", color: color(255, 255, 100), notes: ["D4", "F#4", "A4", "C5"] },
     { chord: "Gm", numeral: "v", color: color(200, 150, 255), notes: ["G4", "Bb4", "D5"] }
@@ -119,451 +100,163 @@ function setup() {
 }
 
 function buildChordSuggestionsFromCSV(data) {
-  console.log("Building chord suggestions from CSV data...");
-  
-  for (let i = 0; i < data.length; i++) {
-    let row = data[i];
-    
-    // Clean up the column names by trimming whitespace
-    let chordName = '';
-    let notesString = '';
-    
-    // Try different possible column names for chords
-    if (row['Chords']) chordName = row['Chords'].trim();
-    else if (row['Chord']) chordName = row['Chord'].trim();
-    else if (row['chord']) chordName = row['chord'].trim();
-    else if (row['CHORDS']) chordName = row['CHORDS'].trim();
-    
-    // Try different possible column names for notes
-    if (row['Notes_From_Degrees']) notesString = row['Notes_From_Degrees'];
-    else if (row['Notes_from_Degrees']) notesString = row['Notes_from_Degrees'];
-    else if (row['notes_from_degrees']) notesString = row['notes_from_degrees'];
-    else if (row['Notes']) notesString = row['Notes'];
-    else if (row['notes']) notesString = row['notes'];
-    
-    // Skip if we don't have both chord name and notes
-    if (!chordName || !notesString) {
-      console.log(`Skipping row ${i}: missing chord (${chordName}) or notes (${notesString})`);
-      continue;
-    }
-    
-    // Parse the notes array
+  for (let row of data) {
+    let chordName = row['Chords']?.trim() || row['Chord']?.trim() || row['chord']?.trim() || row['CHORDS']?.trim();
+    let notesString = row['Notes_From_Degrees'] || row['Notes_from_Degrees'] || row['notes_from_degrees'] || row['Notes'] || row['notes'];
+    if (!chordName || !notesString) continue;
     let notesArray = parseNotes(notesString);
-    
-    // Skip if notes array is empty
-    if (notesArray.length === 0) {
-      console.log(`Skipping ${chordName}: no valid notes found in "${notesString}"`);
-      continue;
-    }
-    
-    // Generate a random color for this chord
-    let chordColor = color(
-      random(80, 255), 
-      random(80, 255), 
-      random(80, 255)
-    );
-    
-    // Store chord data
-    allChordSuggestions.push({
-      chord: chordName,
-      numeral: "", // No roman numeral for CSV chords
-      color: chordColor,
-      notes: notesArray
-    });
-    
-    console.log(`Added chord: ${chordName} with notes: [${notesArray.join(', ')}]`);
+    if (notesArray.length === 0) continue;
+    let chordColor = color(random(80, 255), random(80, 255), random(80, 255));
+    allChordSuggestions.push({ chord: chordName, numeral: "", color: chordColor, notes: notesArray });
   }
-  
-  console.log(`Successfully loaded ${allChordSuggestions.length} chord suggestions from CSV`);
 }
 
 function updatePaletteDisplay() {
   paletteBlocks = [];
-  
   let startIndex = currentPage * chordsPerPage;
   let endIndex = min(startIndex + chordsPerPage, allChordSuggestions.length);
-  
   for (let i = startIndex; i < endIndex; i++) {
-    let chordData = allChordSuggestions[i];
-    let blockIndex = i - startIndex;
-    let x = 80 + (blockIndex * 160);
+    let cd = allChordSuggestions[i];
+    let x = 80 + ((i - startIndex) * 160);
     let y = 520;
-    
-    paletteBlocks.push(new ChordBlock(
-      x, y, 
-      chordData.chord, 
-      chordData.numeral, 
-      chordData.color, 
-      1, 
-      chordData.notes
-    ));
+    paletteBlocks.push(new ChordBlock(x, y, cd.chord, cd.numeral, cd.color, 1, cd.notes));
   }
 }
 
 function parseNotes(notesStr) {
   if (!notesStr) return [];
-  
-  // Convert to string and trim whitespace
   let cleanStr = String(notesStr).trim();
-  
-  // Handle different possible formats
   let notes = [];
-  
-  // Try splitting by comma first
-  if (cleanStr.includes(',')) {
-    notes = cleanStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-  }
-  // Try splitting by space
-  else if (cleanStr.includes(' ')) {
-    notes = cleanStr.split(' ').map(s => s.trim()).filter(s => s.length > 0);
-  }
-  // Try splitting by semicolon
-  else if (cleanStr.includes(';')) {
-    notes = cleanStr.split(';').map(s => s.trim()).filter(s => s.length > 0);
-  }
-  // If no delimiters, treat as single note
-  else if (cleanStr.length > 0) {
-    notes = [cleanStr];
-  }
-  
-  // Validate and clean up note names
-  let validNotes = [];
-  for (let note of notes) {
-    // Remove any brackets or quotes
-    let cleanNote = note.replace(/[\[\]"']/g, '').trim();
-    
-    // Basic validation - should contain at least a letter and number
-    if (cleanNote.match(/[A-Ga-g][#b]?[0-9]/)) {
-      validNotes.push(cleanNote);
-    } else {
-      console.log(`Invalid note format: "${cleanNote}" (original: "${note}")`);
-    }
-  }
-  
-  return validNotes;
+  if (cleanStr.includes(',')) notes = cleanStr.split(',');
+  else if (cleanStr.includes(' ')) notes = cleanStr.split(' ');
+  else if (cleanStr.includes(';')) notes = cleanStr.split(';');
+  else if (cleanStr.length > 0) notes = [cleanStr];
+  return notes.map(n => n.replace(/[\[\]"']/g, '').trim())
+              .filter(n => /[A-Ga-g][#b]?[0-9]/.test(n));
 }
 
 function draw() {
   background(20);
-  
-  // Check for highlighted chord blocks
   checkHighlightedChord();
-  
   drawUI();
-
-  // Handle playback
-  if (isPlaying && sortedChordBlocks.length > 0) {
-    if (playIndex < sortedChordBlocks.length) {
-      let currentBlock = sortedChordBlocks[playIndex];
-      let beats = Math.max(1, currentBlock.w / snapStep) * framesPerBeat;
-
-      // Play the chord when starting this block
-      if (frameCount - playTimer === 1) {
-        if (currentBlock.notes && currentBlock.notes.length > 0) {
-          console.log(`Playing chord ${playIndex + 1}/${sortedChordBlocks.length}: ${currentBlock.chord} - [${currentBlock.notes.join(', ')}]`);
-          synth.triggerAttackRelease(currentBlock.notes, "1n");
-        }
-      }
-
-      // Move to next chord when this one is finished
-      if (frameCount - playTimer >= beats) {
-        playIndex++;
-        playTimer = frameCount;
-        
-        // If we've played all chords, stop playback
-        if (playIndex >= sortedChordBlocks.length) {
-          console.log("Playback finished");
-          isPlaying = false;
-          playIndex = 0;
-        }
-      }
-    }
-  }
 }
 
 function checkHighlightedChord() {
   highlightedBlock = null;
-  
-  // Only check if we're not dragging or resizing
   if (!draggingBlock && !resizingBlock) {
-    // Check chord blocks in progression area
     for (let block of chordBlocks) {
-      if (block.isMouseInside()) {
-        highlightedBlock = block;
-        break;
-      }
+      if (block.isMouseInside()) { highlightedBlock = block; break; }
     }
-    
-    // Check palette blocks if no progression block is highlighted
     if (!highlightedBlock) {
       for (let block of paletteBlocks) {
-        if (block.isMouseInside()) {
-          highlightedBlock = block;
-          break;
-        }
+        if (block.isMouseInside()) { highlightedBlock = block; break; }
       }
     }
   }
-  
-  // Play chord if a new block is highlighted
   if (highlightedBlock && highlightedBlock !== lastHighlightedBlock) {
-    if (highlightedBlock.notes && highlightedBlock.notes.length > 0) {
-      // Make sure Tone.js is started
-      if (Tone.context.state !== 'running') {
-        Tone.start();
-      }
-      // Play the chord with a short duration
+    if (highlightedBlock.notes?.length) {
+      if (Tone.context.state !== 'running') Tone.start();
       synth.triggerAttackRelease(highlightedBlock.notes, "8n");
     }
   }
-  
   lastHighlightedBlock = highlightedBlock;
 }
 
 function drawUI() {
-  // Top bar
-  noStroke();
-  fill(40);
-  rect(0, 0, width, 50);
-  fill(255);
-  textSize(16);
-  textAlign(LEFT, BASELINE);
-  text("Verse", 20, 35);
-
-  // Play button
+  fill(40); noStroke(); rect(0, 0, width, 50);
+  fill(255); textSize(16); textAlign(LEFT, BASELINE); text("Verse", 20, 35);
   drawPlayButton(100, 15, 60, 25);
 
-  // Chord progression area background
-  fill(60);
-  rect(20, 60, width - 40, 80);
-  fill(255);
-  textSize(14);
-  textAlign(CENTER, CENTER);
-  text("Chord Progression", 120, 75);
-
-  // Draw timeline
+  fill(60); rect(20, 60, width - 40, 80);
+  fill(255); textSize(14); textAlign(CENTER, CENTER); text("Chord Progression", 120, 75);
   drawTimeline(gridStartX, 60, 32);
 
-  // Draw all chord blocks in the progression area
-  for (let block of chordBlocks) {
-    const isActive =
-      isPlaying &&
-      sortedChordBlocks.length > 0 &&
-      playIndex < sortedChordBlocks.length &&
-      sortedChordBlocks[playIndex] === block;
+  for (let i = 0; i < chordBlocks.length; i++) {
+    const block = chordBlocks[i];
+    const isActive = isPlaying && i === currentPlayIndex;
     const isHighlighted = highlightedBlock === block;
     block.display(isActive, isHighlighted);
   }
 
-  // Palette area background - make it larger to accommodate pagination controls
-  fill(30);
-  rect(0, 450, width, 200);
-  fill(200);
-  textSize(18);
-  textAlign(LEFT, BASELINE);
-  text("Chord Suggestions", 20, 475);
-  
-  // Show pagination info and controls
-  if (allChordSuggestions.length > 0) {
+  fill(30); rect(0, 450, width, 200);
+  fill(200); textSize(18); textAlign(LEFT, BASELINE); text("Chord Suggestions", 20, 475);
+  if (allChordSuggestions.length) {
     let totalPages = Math.ceil(allChordSuggestions.length / chordsPerPage);
-    
-    fill(150, 200, 150);
-    textSize(12);
+    fill(150, 200, 150); textSize(12);
     text(`Page ${currentPage + 1} of ${totalPages} (${allChordSuggestions.length} total chords)`, 20, 495);
-    
-    // Draw pagination buttons
     drawPaginationButtons(20, 500, totalPages);
-  } else {
-    fill(150, 150, 100);
-    textSize(12);
-    text("Load a CSV file to see chord suggestions", 20, 495);
   }
-
-  // Draw palette blocks
   for (let block of paletteBlocks) {
     const isHighlighted = highlightedBlock === block;
     block.display(false, isHighlighted);
   }
-
-  // Draw dragging block if applicable
-  if (draggingBlock && isDraggingPalette) {
-    draggingBlock.display(false, false);
-  }
+  if (draggingBlock && isDraggingPalette) draggingBlock.display(false, false);
 }
 
 function drawPaginationButtons(x, y, totalPages) {
-  let buttonWidth = 30;
-  let buttonHeight = 20;
-  let buttonSpacing = 5;
-  
-  // Previous button
+  let bw = 30, bh = 20, bs = 5;
   let prevEnabled = currentPage > 0;
-  fill(prevEnabled ? 80 : 40);
-  stroke(prevEnabled ? 150 : 80);
-  strokeWeight(1);
-  rect(x, y, buttonWidth, buttonHeight, 3);
-  fill(prevEnabled ? 255 : 100);
-  noStroke();
-  textAlign(CENTER, CENTER);
-  textSize(12);
-  text("◀", x + buttonWidth/2, y + buttonHeight/2);
-  
-  // Page indicator
-  let pageX = x + buttonWidth + buttonSpacing;
-  fill(60);
-  stroke(120);
-  rect(pageX, y, 80, buttonHeight, 3);
-  fill(255);
-  noStroke();
-  text(`${currentPage + 1} / ${totalPages}`, pageX + 40, y + buttonHeight/2);
-  
-  // Next button
+  fill(prevEnabled ? 80 : 40); stroke(prevEnabled ? 150 : 80); rect(x, y, bw, bh, 3);
+  fill(prevEnabled ? 255 : 100); noStroke(); textAlign(CENTER, CENTER); text("◀", x + bw/2, y + bh/2);
+  let pageX = x + bw + bs;
+  fill(60); stroke(120); rect(pageX, y, 80, bh, 3);
+  fill(255); noStroke(); text(`${currentPage + 1} / ${totalPages}`, pageX + 40, y + bh/2);
   let nextEnabled = currentPage < totalPages - 1;
-  let nextX = pageX + 80 + buttonSpacing;
-  fill(nextEnabled ? 80 : 40);
-  stroke(nextEnabled ? 150 : 80);
-  strokeWeight(1);
-  rect(nextX, y, buttonWidth, buttonHeight, 3);
-  fill(nextEnabled ? 255 : 100);
-  noStroke();
-  textAlign(CENTER, CENTER);
-  text("▶", nextX + buttonWidth/2, y + buttonHeight/2);
+  let nextX = pageX + 80 + bs;
+  fill(nextEnabled ? 80 : 40); stroke(nextEnabled ? 150 : 80); rect(nextX, y, bw, bh, 3);
+  fill(nextEnabled ? 255 : 100); noStroke(); text("▶", nextX + bw/2, y + bh/2);
 }
 
 function drawPlayButton(x, y, w, h) {
-  fill(isPlaying ? 60 : 80);
-  stroke(255);
-  strokeWeight(1);
-  rect(x, y, w, h, 5);
-  fill(255);
-  noStroke();
-  textSize(14);
-  textAlign(CENTER, CENTER);
-  text(isPlaying ? "Stop" : "Play", x + w / 2, y + h / 2);
-  
-  // Show playback progress if playing
-  if (isPlaying && sortedChordBlocks.length > 0) {
-    fill(255, 150);
-    textSize(10);
-    text(`${playIndex}/${sortedChordBlocks.length}`, x + w / 2, y + h + 15);
-  }
+  fill(isPlaying ? 60 : 80); stroke(255); rect(x, y, w, h, 5);
+  fill(255); noStroke(); textSize(14); textAlign(CENTER, CENTER);
+  text(isPlaying ? "Stop" : "Play", x + w/2, y + h/2);
 }
 
 function drawTimeline(startX, y, steps) {
   stroke(100);
-  strokeWeight(1);
   for (let i = 0; i < steps; i++) {
     let x = startX + i * snapStep;
     line(x, y, x, y - 10);
-    noStroke();
-    fill(150);
-    textAlign(CENTER, BASELINE);
-    textSize(10);
+    noStroke(); fill(150); textAlign(CENTER, BASELINE); textSize(10);
     if (i % 2 === 0) text((i / 2 + 1), x, y - 15);
     stroke(100);
   }
-  noStroke();
 }
 
 class ChordBlock {
   constructor(x, y, chord, numeral, col, lengthInGrids = 1, notes = []) {
-    this.x = x;
-    this.y = y;
+    this.x = x; this.y = y;
     this.w = gridSpacing * lengthInGrids;
     this.h = 50;
-    this.chord = chord;
-    this.numeral = numeral;
-    this.col = col;
-    this.notes = notes;
+    this.chord = chord; this.numeral = numeral;
+    this.col = col; this.notes = notes;
   }
-
   display(isGlowing = false, isHighlighted = false) {
-    // Highlight effect for hovered block
     if (isHighlighted) {
-      // Create a subtle pulse effect
       let pulse = sin(frameCount * 0.2) * 0.3 + 0.7;
-      stroke(255, 200 * pulse);
-      strokeWeight(2);
-      
-      // Slightly brighten the block color
-      let highlightColor = lerpColor(this.col, color(255), 0.3);
-      fill(highlightColor);
-    } 
-    // Glow effect for active block during playback
-    else if (isGlowing) {
+      stroke(255, 200 * pulse); strokeWeight(2);
+      fill(lerpColor(this.col, color(255), 0.3));
+    } else if (isGlowing) {
       let glow = sin(frameCount * 0.3) * 100 + 155;
-      stroke(255, glow);
-      strokeWeight(3);
-      fill(this.col);
-    } 
-    else {
-      stroke(255, 100);
-      strokeWeight(1);
-      fill(this.col);
+      stroke(255, glow); strokeWeight(3); fill(this.col);
+    } else {
+      stroke(255, 100); strokeWeight(1); fill(this.col);
     }
-
-    // Main block
     rect(this.x, this.y, this.w, this.h, 8);
-
-    // Resize handles (only show when not highlighted or glowing)
     if (!isGlowing && !isHighlighted) {
-      fill(255, 100);
-      noStroke();
+      fill(255, 100); noStroke();
       rect(this.x, this.y, resizeMargin, this.h, 8, 0, 0, 8);
       rect(this.x + this.w - resizeMargin, this.y, resizeMargin, this.h, 0, 8, 8, 0);
     }
-
-    // Chord text
-    fill(255);
-    noStroke();
-    textSize(16);
-    textAlign(CENTER, CENTER);
-    text(this.chord, this.x + this.w / 2, this.y + this.h / 2 - 5);
-
-    // Roman numeral (if present)
-    if (this.numeral) {
-      textSize(10);
-      fill(255, 150);
-      text(this.numeral, this.x + this.w / 2, this.y + this.h / 2 + 10);
-    }
-
-    // Debug: show notes count and first few notes
-    if (this.notes && this.notes.length > 0) {
-      fill(255, 120);
-      textSize(8);
-      let notesPreview = this.notes.slice(0, 3).join(', ');
-      if (this.notes.length > 3) notesPreview += '...';
-      text(`${this.notes.length} notes: ${notesPreview}`, this.x + this.w / 2, this.y - 8);
-    }
-    
-    // Add "Hover to play" hint for highlighted blocks
-    if (isHighlighted && this.notes && this.notes.length > 0) {
-      fill(255, 200);
-      textSize(8);
-      text("♪ Playing chord", this.x + this.w / 2, this.y + this.h + 12);
-    }
+    fill(255); noStroke(); textSize(16); textAlign(CENTER, CENTER);
+    text(this.chord, this.x + this.w/2, this.y + this.h/2 - 5);
+    if (this.numeral) { textSize(10); fill(255, 150); text(this.numeral, this.x + this.w/2, this.y + this.h/2 + 10); }
   }
-
-  isMouseInside() {
-    return mouseX > this.x && mouseX < this.x + this.w &&
-           mouseY > this.y && mouseY < this.y + this.h;
-  }
-
-  isMouseOnLeftEdge() {
-    return mouseX > this.x && mouseX < this.x + resizeMargin &&
-           mouseY > this.y && mouseY < this.y + this.h;
-  }
-
-  isMouseOnRightEdge() {
-    return mouseX > this.x + this.w - resizeMargin &&
-           mouseX < this.x + this.w &&
-           mouseY > this.y && mouseY < this.y + this.h;
-  }
-
-  cloneAt(x, y) {
-    return new ChordBlock(x, y, this.chord, this.numeral, this.col, this.w / gridSpacing, [...this.notes]);
-  }
-
+  isMouseInside() { return mouseX > this.x && mouseX < this.x + this.w && mouseY > this.y && mouseY < this.y + this.h; }
+  isMouseOnLeftEdge() { return mouseX > this.x && mouseX < this.x + resizeMargin && mouseY > this.y && mouseY < this.y + this.h; }
+  isMouseOnRightEdge() { return mouseX > this.x + this.w - resizeMargin && mouseX < this.x + this.w && mouseY > this.y && mouseY < this.y + this.h; }
+  cloneAt(x, y) { return new ChordBlock(x, y, this.chord, this.numeral, this.col, this.w / gridSpacing, [...this.notes]); }
   snapToGrid() {
     this.x = round((this.x - gridStartX) / snapStep) * snapStep + gridStartX;
     this.w = round(this.w / snapStep) * snapStep;
@@ -571,86 +264,53 @@ class ChordBlock {
   }
 }
 
-function isOverlapping(a, b) {
-  return !(a.x + a.w <= b.x || a.x >= b.x + b.w);
-}
+function isOverlapping(a, b) { return !(a.x + a.w <= b.x || a.x >= b.x + b.w); }
 
-// Mouse handlers
 function mousePressed() {
-  // Play button
   if (mouseX > 100 && mouseX < 160 && mouseY > 15 && mouseY < 40) {
     if (!isPlaying) {
-      // Sort chord blocks by their x position (left to right)
       sortedChordBlocks = chordBlocks
-        .filter(b => b.y === timelineY && b.notes && b.notes.length > 0)
-        .slice()
-        .sort((a, b) => a.x - b.x);
-      
+        .filter(b => b.y === timelineY && b.notes?.length)
+        .slice().sort((a, b) => a.x - b.x);
       if (sortedChordBlocks.length > 0) {
-        console.log(`Starting playback with ${sortedChordBlocks.length} chords:`);
-        for (let i = 0; i < sortedChordBlocks.length; i++) {
-          let block = sortedChordBlocks[i];
-          console.log(`  ${i + 1}. ${block.chord} at position ${block.x} - [${block.notes.join(', ')}]`);
-        }
-        
-        playIndex = 0;
-        playTimer = frameCount;
-        isPlaying = true;
+        Tone.Transport.cancel();
+        let timePos = 0;
+        sortedChordBlocks.forEach((block, i) => {
+          let beats = Math.max(1, block.w / snapStep);
+          Tone.Transport.schedule(time => {
+            currentPlayIndex = i;
+            synth.triggerAttackRelease(block.notes, beats + "n", time);
+          }, `${timePos}n`);
+          timePos += beats;
+        });
+        currentPlayIndex = -1;
         Tone.start();
-      } else {
-        console.log("No valid chords to play");
+        Tone.Transport.start();
+        isPlaying = true;
       }
     } else {
-      console.log("Stopping playback");
+      Tone.Transport.stop();
+      Tone.Transport.cancel();
+      currentPlayIndex = -1;
       isPlaying = false;
-      playIndex = 0;
     }
     return;
   }
-
-  // Pagination buttons
   if (allChordSuggestions.length > 0) {
     let totalPages = Math.ceil(allChordSuggestions.length / chordsPerPage);
-    let buttonY = 500;
-    let buttonHeight = 20;
-    let buttonWidth = 30;
-    let buttonSpacing = 5;
-    
-    // Previous button
-    if (mouseX >= 20 && mouseX <= 20 + buttonWidth && 
-        mouseY >= buttonY && mouseY <= buttonY + buttonHeight && 
-        currentPage > 0) {
-      currentPage--;
-      updatePaletteDisplay();
-      return;
+    let buttonY = 500, bh = 20, bw = 30, bs = 5;
+    if (mouseX >= 20 && mouseX <= 20 + bw && mouseY >= buttonY && mouseY <= buttonY + bh && currentPage > 0) {
+      currentPage--; updatePaletteDisplay(); return;
     }
-    
-    // Next button
-    let nextX = 20 + buttonWidth + buttonSpacing + 80 + buttonSpacing;
-    if (mouseX >= nextX && mouseX <= nextX + buttonWidth && 
-        mouseY >= buttonY && mouseY <= buttonY + buttonHeight && 
-        currentPage < totalPages - 1) {
-      currentPage++;
-      updatePaletteDisplay();
-      return;
+    let nextX = 20 + bw + bs + 80 + bs;
+    if (mouseX >= nextX && mouseX <= nextX + bw && mouseY >= buttonY && mouseY <= buttonY + bh && currentPage < totalPages - 1) {
+      currentPage++; updatePaletteDisplay(); return;
     }
   }
-
-  // Check for resize handles on chord blocks
   for (let block of chordBlocks) {
-    if (block.isMouseOnLeftEdge()) {
-      resizingBlock = block;
-      resizingSide = "left";
-      return;
-    }
-    if (block.isMouseOnRightEdge()) {
-      resizingBlock = block;
-      resizingSide = "right";
-      return;
-    }
+    if (block.isMouseOnLeftEdge()) { resizingBlock = block; resizingSide = "left"; return; }
+    if (block.isMouseOnRightEdge()) { resizingBlock = block; resizingSide = "right"; return; }
   }
-
-  // Check for dragging from palette
   for (let block of paletteBlocks) {
     if (block.isMouseInside()) {
       draggingBlock = block.cloneAt(block.x, block.y);
@@ -660,8 +320,6 @@ function mousePressed() {
       return;
     }
   }
-
-  // Check for dragging existing chord blocks
   for (let block of chordBlocks) {
     if (block.isMouseInside()) {
       draggingBlock = block;
@@ -684,21 +342,17 @@ function mouseDragged() {
       let oldRight = resizingBlock.x + resizingBlock.w;
       let newX = round((mouseX - gridStartX) / snapStep) * snapStep + gridStartX;
       newX = min(newX, oldRight - snapStep * minGridUnits);
-      let newW = oldRight - newX;
       resizingBlock.x = newX;
-      resizingBlock.w = newW;
+      resizingBlock.w = oldRight - newX;
     }
     return;
   }
-
   if (!draggingBlock) return;
-
   if (isDraggingPalette) {
     draggingBlock.x = mouseX - offsetX;
     draggingBlock.y = mouseY - offsetY;
     return;
   }
-
   let snappedX = round((mouseX - offsetX - gridStartX) / snapStep) * snapStep + gridStartX;
   snappedX = constrain(snappedX, gridStartX, width - draggingBlock.w);
   draggingBlock.x = snappedX;
@@ -707,22 +361,11 @@ function mouseDragged() {
 
 function mouseReleased() {
   if (resizingBlock) {
-    resizingBlock.snapToGrid();
-    resizingBlock = null;
-    resizingSide = null;
-    return;
+    resizingBlock.snapToGrid(); resizingBlock = null; resizingSide = null; return;
   }
-
   if (!draggingBlock) return;
-
   draggingBlock.snapToGrid();
-
-  let hasOverlap = chordBlocks.some(block => {
-    return block !== draggingBlock &&
-           block.y === timelineY &&
-           isOverlapping(block, draggingBlock);
-  });
-
+  let hasOverlap = chordBlocks.some(block => block !== draggingBlock && block.y === timelineY && isOverlapping(block, draggingBlock));
   if (hasOverlap) {
     if (!isDraggingPalette) {
       draggingBlock.x = draggingBlock.originalX;
@@ -730,21 +373,15 @@ function mouseReleased() {
     }
   } else {
     if (isDraggingPalette && draggingBlock.y < 450) {
-      draggingBlock.y = timelineY;
-      chordBlocks.push(draggingBlock);
+      draggingBlock.y = timelineY; chordBlocks.push(draggingBlock);
     }
   }
-
-  draggingBlock = null;
-  isDraggingPalette = false;
+  draggingBlock = null; isDraggingPalette = false;
 }
 
 function doubleClicked() {
   for (let i = chordBlocks.length - 1; i >= 0; i--) {
-    if (chordBlocks[i].isMouseInside()) {
-      chordBlocks.splice(i, 1);
-      break;
-    }
+    if (chordBlocks[i].isMouseInside()) { chordBlocks.splice(i, 1); break; }
   }
 }
 </script>
