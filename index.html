@@ -1327,10 +1327,9 @@ function duplicateHoveredChord() {
     [...targetBlock.notes], // Copy the notes array
     targetBlock.score
   );
-  
+
   chordBlocks.push(duplicate);
-  console.log(`Duplicated chord ${targetBlock.chord} at position ${duplicateX}`);
-  
+  console.log(`Duplicated chord ${targetBlock.chord} at position ${duplicateX}`); 
   // Give visual feedback by briefly highlighting the duplicate
   setTimeout(() => {
     // This will be handled by the visual feedback in the draw loop
