@@ -95,7 +95,20 @@
     #metronomeBtn:hover {
       background: #666;
     }
-    #metronomeBtn.active {
+    #loopBtn {
+      background: #555;
+      color: white;
+      border: 1px solid #777;
+      border-radius: 3px;
+      padding: 3px 8px;
+      margin-left: 5px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #loopBtn:hover {
+      background: #666;
+    }
+    #loopBtn.active {
       background: #4a9;
       border-color: #5ba;
     }
@@ -138,6 +151,7 @@
   BPM: <span id="bpmDisplay">120</span>
   <input type="range" id="bpmSlider" min="60" max="200" value="120" step="5">
   <button id="metronomeBtn">♪</button>
+  <button id="loopBtn">🔁</button>
 </div>
 <div id="apiStatus">Ready for API suggestions</div>
 <button id="clearSuggestionsBtn" style="display: none;">Clear AI Suggestions</button>
@@ -178,6 +192,10 @@ let metronomeSound;
 // New variables for sync functionality
 let waitingForDownbeat = false;
 let playbackStartRequested = false;
+
+// Loop functionality
+let isLooping = false;
+let loopCount = 0;
 
 let highlightedBlock = null;
 let lastHighlightedBlock = null;
@@ -246,6 +264,11 @@ function setup() {
     toggleMetronome();
   });
 
+  // Set up loop button
+  document.getElementById("loopBtn").addEventListener("click", function(evt) {
+    toggleLoop();
+  });
+
   // Set up clear suggestions button
   document.getElementById("clearSuggestionsBtn").addEventListener("click", function() {
     clearApiSuggestions();
@@ -300,6 +323,22 @@ function toggleMetronome() {
   }
 }
 
+function toggleLoop() {
+  isLooping = !isLooping;
+  let btn = document.getElementById("loopBtn");
+  
+  if (isLooping) {
+    btn.classList.add("active");
+    btn.textContent = "🔄";
+    loopCount = 0;
+    console.log("Loop mode enabled");
+  } else {
+    btn.classList.remove("active");
+    btn.textContent = "🔁";
+    console.log("Loop mode disabled");
+  }
+}
+
 function updateFramesPerBeat() {
   // Calculate frames per beat based on BPM (assuming 60 FPS)
   framesPerBeat = Math.round(60 * 60 / bpm); // 60 FPS * 60 seconds / BPM
@@ -332,7 +371,7 @@ async function fetchChordSuggestions(chordName) {
   updateApiStatus(`Fetching suggestions for ${chordName}...`);
 
   try {
-    const response = await fetch(`https://rechord.onrender.com/api/suggest/${encodeURIComponent(chordName)}?num_suggestions=10`);
+    const response = await fetch(`https://rechord.onrender.com/api/suggest/${encodeURIComponent(chordName)}?num_suggestions=20`);
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -639,10 +678,26 @@ function draw() {
         synth.triggerAttackRelease(nextBlock.notes, "2n");
         playTimer = frameCount;
       } else {
-        console.log("Playback completed");
-        synth.releaseAll();
-        isPlaying = false;
-        playIndex = 0;
+        // Reached end of progression
+        if (isLooping) {
+          // Reset to beginning and continue
+          loopCount++;
+          playIndex = 0;
+          console.log(`Loop ${loopCount} - restarting progression`);
+          
+          if (sortedChordBlocks[0].notes && sortedChordBlocks[0].notes.length > 0) {
+            synth.releaseAll();
+            synth.triggerAttackRelease(sortedChordBlocks[0].notes, "2n");
+            playTimer = frameCount;
+          }
+        } else {
+          // Stop playback
+          console.log("Playback completed");
+          synth.releaseAll();
+          isPlaying = false;
+          playIndex = 0;
+          loopCount = 0;
+        }
       }
     }
   }
@@ -815,12 +870,12 @@ function drawUI() {
     fill(150, 150, 200);
     textSize(10);
     textAlign(LEFT, BASELINE);
-    text("Hover over chord blocks above to get AI suggestions. Use search to filter chords. Ctrl+D to duplicate hovered chord.", 300, 495);
+    text("Hover over chord blocks above to get AI suggestions. Ctrl+D to duplicate hovered chord. Loop button for repeat playback.", 300, 495);
   } else if (chordBlocks.length > 0 && apiSuggestionsActive) {
     fill(150, 200, 150);
     textSize(10);
     textAlign(LEFT, BASELINE);
-    text("AI suggestions active. Use search to override and filter, or click 'Clear AI Suggestions'. Ctrl+D to duplicate.", 300, 495);
+    text("AI suggestions active. Use search to override. Ctrl+D to duplicate. Loop button for repeat playback.", 300, 495);
   }
 }
 
@@ -889,7 +944,11 @@ function drawPlayButton(x, y, w, h) {
   if (isPlaying && sortedChordBlocks.length > 0) {
     fill(255, 150);
     textSize(10);
-    text(`${playIndex}/${sortedChordBlocks.length}`, x + w / 2, y + h + 15);
+    let progressText = `${playIndex + 1}/${sortedChordBlocks.length}`;
+    if (isLooping && loopCount > 0) {
+      progressText += ` (Loop ${loopCount})`;
+    }
+    text(progressText, x + w / 2, y + h + 15);
   } else if (waitingForDownbeat) {
     fill(255, 200, 0, 150);
     textSize(10);
@@ -907,6 +966,19 @@ function drawPlayButton(x, y, w, h) {
     textSize(8);
     textAlign(LEFT, CENTER);
     text(`${bpm}`, x + w + 25, y + h/2);
+  }
+  
+  // Draw loop indicator if active
+  if (isLooping) {
+    let pulse = sin(frameCount * 0.2) * 0.5 + 0.5;
+    fill(100, 150, 255, 100 + pulse * 100);
+    noStroke();
+    ellipse(x + w + 40, y + h/2, 8, 8);
+    
+    fill(255);
+    textSize(8);
+    textAlign(LEFT, CENTER);
+    text("LOOP", x + w + 50, y + h/2);
   }
 }
 
@@ -1031,7 +1103,8 @@ function startPlayback() {
     .sort((a, b) => a.x - b.x);
   
   if (sortedChordBlocks.length > 0) {
-    console.log(`Starting playback with ${sortedChordBlocks.length} chords:`);
+    let loopText = isLooping ? " (Loop mode enabled)" : "";
+    console.log(`Starting playback with ${sortedChordBlocks.length} chords${loopText}:`);
     for (let i = 0; i < sortedChordBlocks.length; i++) {
       let block = sortedChordBlocks[i];
       console.log(`  ${i + 1}. ${block.chord} at position ${block.x} - [${block.notes.join(', ')}]`);
@@ -1040,6 +1113,7 @@ function startPlayback() {
     playIndex = 0;
     playTimer = frameCount;
     isPlaying = true;
+    loopCount = 0; // Reset loop counter at start
     
     console.log("Playing first chord immediately");
     if (sortedChordBlocks[0].notes && sortedChordBlocks[0].notes.length > 0) {
@@ -1059,6 +1133,7 @@ function handlePlayButtonPress() {
     waitingForDownbeat = false;
     playbackStartRequested = false;
     playIndex = 0;
+    loopCount = 0; // Reset loop counter when stopping
   } else {
     // Start playback logic
     if (isMetronomeOn) {
@@ -1327,9 +1402,10 @@ function duplicateHoveredChord() {
     [...targetBlock.notes], // Copy the notes array
     targetBlock.score
   );
-
+  
   chordBlocks.push(duplicate);
-  console.log(`Duplicated chord ${targetBlock.chord} at position ${duplicateX}`); 
+  console.log(`Duplicated chord ${targetBlock.chord} at position ${duplicateX}`);
+  
   // Give visual feedback by briefly highlighting the duplicate
   setTimeout(() => {
     // This will be handled by the visual feedback in the draw loop
