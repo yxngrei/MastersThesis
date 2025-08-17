@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>p5.js + Tone.js + PapaParse CSV Chords</title>
+
+  <!-- p5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+  <!-- Tone.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+
+  <!-- PapaParse -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    #loadingStatus {
+      position: absolute;
+      top: 10px;
+      left: 180px;
+      z-index: 10;
+      padding: 5px 10px;
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    #fileInput {
+      position: absolute;
+      top: 35px;
+      left: 180px;
+      z-index: 10;
+      padding: 3px;
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    #searchInput {
+      position: absolute;
+      top: 10px;
+      left: 400px;
+      z-index: 10;
+      padding: 5px 10px;
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 12px;
+      width: 200px;
+    }
+    #searchInput::placeholder {
+      color: #aaa;
+    }
+    #bpmControls {
+      position: absolute;
+      top: 10px;
+      left: 650px;
+      z-index: 10;
+      background: #333;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 5px;
+      color: white;
+      font-size: 12px;
+    }
+    #bpmSlider {
+      width: 100px;
+      margin: 0 5px;
+    }
+    #metronomeBtn {
+      background: #555;
+      color: white;
+      border: 1px solid #777;
+      border-radius: 3px;
+      padding: 3px 8px;
+      margin-left: 5px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #metronomeBtn:hover {
+      background: #666;
+    }
+    #loopBtn {
+      background: #555;
+      color: white;
+      border: 1px solid #777;
+      border-radius: 3px;
+      padding: 3px 8px;
+      margin-left: 5px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #loopBtn:hover {
+      background: #666;
+    }
+    #loopBtn.active {
+      background: #4a9;
+      border-color: #5ba;
+    }
+    #apiStatus {
+      position: absolute;
+      top: 10px;
+      right: 20px;
+      z-index: 10;
+      padding: 5px 10px;
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    #clearSuggestionsBtn {
+      position: absolute;
+      top: 40px;
+      right: 20px;
+      z-index: 10;
+      padding: 5px 10px;
+      background: #555;
+      color: white;
+      border: 1px solid #777;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #clearSuggestionsBtn:hover {
+      background: #666;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loadingStatus">Loading chords_with_notes.csv...</div>
+<input type="file" id="fileInput" accept=".csv" style="display: none;" />
+<input type="text" id="searchInput" placeholder="Search chords (e.g. 'Am', 'major', 'C#')" />
+<div id="bpmControls">
+  BPM: <span id="bpmDisplay">120</span>
+  <input type="range" id="bpmSlider" min="60" max="200" value="120" step="5">
+  <button id="metronomeBtn">♪</button>
+  <button id="loopBtn">🔁</button>
+</div>
+<div id="apiStatus">Ready for API suggestions (score &lt; 0.5)</div>
+<button id="clearSuggestionsBtn" style="display: none;">Clear AI Suggestions</button>
+
+<script>
+let chordBlocks = [];
+let paletteBlocks = [];
+let allChordSuggestions = [];
+let filteredChordSuggestions = [];
+let apiSuggestions = [];
+let currentPage = 0;
+let chordsPerPage = 8;
+let draggingBlock = null;
+let resizingBlock = null;
+let resizingSide = null;
+let offsetX = 0, offsetY = 0;
+let isDraggingPalette = false;
+let searchQuery = "";
+
+const gridStartX = 240;
+const gridSpacing = 80;
+const snapStep = 40;
+const timelineY = 80;
+const minGridUnits = 1;
+const resizeMargin = 10;
+
+let isPlaying = false;
+let playIndex = 0;
+let playTimer = 0;
+let framesPerBeat = 30;
+let sortedChordBlocks = [];
+let bpm = 120;
+let isMetronomeOn = false;
+let metronomeTimer = 0;
+let beatCount = 0;
+let metronomeSound;
+
+// New variables for sync functionality
+let waitingForDownbeat = false;
+let playbackStartRequested = false;
+
+// Loop functionality
+let isLooping = false;
+let loopCount = 0;
+
+let highlightedBlock = null;
+let lastHighlightedBlock = null;
+
+let isLoadingApiSuggestions = false;
+let lastApiRequestChord = null;
+let apiSuggestionsActive = false;
+let persistentApiSuggestions = false;
+
+const synth = new Tone.PolySynth(Tone.Synth).toDestination();
+
+function setup() {
+  createCanvas(1920, 1080);
+
+  // Initialize metronome sound
+  metronomeSound = new Tone.Synth({
+    oscillator: { type: "sine" },
+    envelope: {
+      attack: 0.001,
+      decay: 0.1,
+      sustain: 0,
+      release: 0.1
+    }
+  }).toDestination();
+
+  // Add some default chord blocks for testing
+  chordBlocks.push(new ChordBlock(gridStartX, timelineY, "C", "I", color(100, 150, 255), 2, ["C4", "E4", "G4"]));
+  chordBlocks.push(new ChordBlock(gridStartX + 160, timelineY, "Am", "vi", color(255, 100, 150), 1, ["A4", "C5", "E5"]));
+
+  // Set up manual file input handler
+  document.getElementById("fileInput").addEventListener("change", function(evt) {
+    let file = evt.target.files[0];
+    if (!file) return;
+    loadCSVFile(file);
+  });
+
+  // Set up search input handler
+  document.getElementById("searchInput").addEventListener("input", function(evt) {
+    searchQuery = evt.target.value.toLowerCase().trim();
+    console.log("Search query:", searchQuery);
+    filterChords();
+    
+    // Always update the palette display when searching, even with AI suggestions
+    // If there's a search query and AI suggestions are active, switch to filtered results
+    if (searchQuery && persistentApiSuggestions) {
+      apiSuggestionsActive = false;
+      persistentApiSuggestions = false;
+      document.getElementById("clearSuggestionsBtn").style.display = "none";
+      updateApiStatus("Search overrode AI suggestions - hover chord to get new suggestions");
+    }
+    
+    currentPage = 0;
+    updatePaletteDisplay();
+  });
+
+  // Set up BPM controls
+  document.getElementById("bpmSlider").addEventListener("input", function(evt) {
+    bpm = parseInt(evt.target.value);
+    document.getElementById("bpmDisplay").textContent = bpm;
+    updateFramesPerBeat();
+    console.log("BPM changed to:", bpm);
+  });
+
+  // Set up metronome button
+  document.getElementById("metronomeBtn").addEventListener("click", function(evt) {
+    toggleMetronome();
+  });
+
+  // Set up loop button
+  document.getElementById("loopBtn").addEventListener("click", function(evt) {
+    toggleLoop();
+  });
+
+  // Set up clear suggestions button
+  document.getElementById("clearSuggestionsBtn").addEventListener("click", function() {
+    clearApiSuggestions();
+  });
+
+  // Add some default palette blocks
+  allChordSuggestions.push(
+    { chord: "G", numeral: "V", color: color(255, 200, 100), notes: ["G4", "B4", "D5"] },
+    { chord: "Dm", numeral: "ii", color: color(200, 100, 255), notes: ["D4", "F4", "A4"] },
+    { chord: "Em", numeral: "iii", color: color(100, 255, 200), notes: ["E4", "G4", "B4"] },
+    { chord: "F", numeral: "IV", color: color(255, 150, 100), notes: ["F4", "A4", "C5"] },
+    { chord: "Am7", numeral: "vi7", color: color(150, 255, 150), notes: ["A4", "C5", "E5", "G5"] },
+    { chord: "Bb", numeral: "bVII", color: color(255, 100, 255), notes: ["Bb4", "D5", "F5"] },
+    { chord: "Cm", numeral: "i", color: color(100, 200, 255), notes: ["C4", "Eb4", "G4"] },
+    { chord: "D7", numeral: "V7/V", color: color(255, 255, 100), notes: ["D4", "F#4", "A4", "C5"] },
+    { chord: "Gm", numeral: "v", color: color(200, 150, 255), notes: ["G4", "Bb4", "D5"] }
+  );
+  filterChords();
+  updatePaletteDisplay();
+  updateFramesPerBeat();
+
+  // Try to load CSV file
+  loadCSVFromPath("chords_with_notes.csv");
+}
+
+function toggleMetronome() {
+  isMetronomeOn = !isMetronomeOn;
+  let btn = document.getElementById("metronomeBtn");
+  
+  if (isMetronomeOn) {
+    btn.classList.add("active");
+    btn.textContent = "♫";
+    metronomeTimer = frameCount;
+    beatCount = 0;
+    console.log("Metronome started at", bpm, "BPM");
+    
+    // Start Tone.js context if needed
+    if (Tone.context.state !== 'running') {
+      Tone.start();
+    }
+  } else {
+    btn.classList.remove("active");
+    btn.textContent = "♪";
+    console.log("Metronome stopped");
+    
+    // If we were waiting for downbeat and metronome stops, cancel playback request
+    if (waitingForDownbeat) {
+      waitingForDownbeat = false;
+      playbackStartRequested = false;
+      console.log("Playback request cancelled - metronome stopped");
+    }
+  }
+}
+
+function toggleLoop() {
+  isLooping = !isLooping;
+  let btn = document.getElementById("loopBtn");
+  
+  if (isLooping) {
+    btn.classList.add("active");
+    btn.textContent = "🔄";
+    loopCount = 0;
+    console.log("Loop mode enabled");
+  } else {
+    btn.classList.remove("active");
+    btn.textContent = "🔁";
+    console.log("Loop mode disabled");
+  }
+}
+
+function updateFramesPerBeat() {
+  // Calculate frames per beat based on BPM (assuming 60 FPS)
+  framesPerBeat = Math.round(60 * 60 / bpm); // 60 FPS * 60 seconds / BPM
+  console.log("Frames per beat updated to:", framesPerBeat, "for BPM:", bpm);
+}
+
+function clearApiSuggestions() {
+  apiSuggestionsActive = false;
+  persistentApiSuggestions = false;
+  lastApiRequestChord = null;
+  apiSuggestions = [];
+  currentPage = 0;
+  updatePaletteDisplay();
+  updateApiStatus("Ready for API suggestions (score < 0.5)");
+  document.getElementById("clearSuggestionsBtn").style.display = "none";
+  
+  // If there's a search query, make sure we show filtered results
+  if (searchQuery) {
+    console.log("Cleared AI suggestions, showing search results for:", searchQuery);
+  }
+}
+
+async function fetchChordSuggestions(chordName) {
+  if (isLoadingApiSuggestions || lastApiRequestChord === chordName) {
+    return;
+  }
+
+  isLoadingApiSuggestions = true;
+  lastApiRequestChord = chordName;
+  updateApiStatus(`Fetching suggestions for ${chordName}...`);
+
+  try {
+    const response = await fetch(`https://rechord.onrender.com/api/suggest/${encodeURIComponent(chordName)}?num_suggestions=100`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log("API response:", data);
+
+    apiSuggestions = [];
+    let filteredCount = 0;
+    let totalCount = 0;
+    
+    if (data.status === "success" && data.suggestions && Array.isArray(data.suggestions)) {
+      for (let suggestion of data.suggestions) {
+        totalCount++;
+        
+        // Extract chord name and score from the suggestion object
+        let chordName = suggestion.chord || suggestion;
+        let score = suggestion.score || 0;
+        
+        // Only include suggestions with score < 0.5
+        if (score < 0.5) {
+          filteredCount++;
+          let randomNotes = generateRandomNotesForChord(chordName);
+          
+          // Use score to influence color - lower scores get more vibrant colors (since we want low scores)
+          let colorIntensity = Math.min(255, 150 + ((0.5 - score) * 210)); // Invert score so lower = brighter
+          
+          apiSuggestions.push({
+            chord: chordName,
+            numeral: "", 
+            color: color(
+              random(colorIntensity - 50, colorIntensity), 
+              random(colorIntensity - 50, colorIntensity), 
+              random(colorIntensity - 50, colorIntensity)
+            ),
+            notes: randomNotes,
+            score: score // Store the score for potential future use
+          });
+        }
+      }
+    }
+
+    console.log(`Loaded ${filteredCount} API suggestions for ${chordName} (filtered from ${totalCount} total, showing only score < 0.5)`);
+    
+    apiSuggestionsActive = true;
+    persistentApiSuggestions = true; // Make suggestions persistent
+    currentPage = 0;
+    updatePaletteDisplay();
+    updateApiStatus(`Loaded ${filteredCount} filtered suggestions for ${chordName} (${totalCount - filteredCount} filtered out)`);
+    document.getElementById("clearSuggestionsBtn").style.display = "block"; // Show clear button
+
+  } catch (error) {
+    console.error("Error fetching chord suggestions:", error);
+    updateApiStatus(`Error loading suggestions for ${chordName}`);
+  } finally {
+    isLoadingApiSuggestions = false;
+  }
+}
+
+function generateRandomNotesForChord(chordName) {
+  const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const octave = Math.floor(Math.random() * 2) + 4;
+  
+  let rootNote = chordName.charAt(0).toUpperCase();
+  if (chordName.length > 1 && (chordName.charAt(1) === '#' || chordName.charAt(1) === 'b')) {
+    rootNote += chordName.charAt(1);
+  }
+  
+  let rootIndex = noteNames.indexOf(rootNote);
+  if (rootIndex === -1) rootIndex = 0;
+  
+  let third = noteNames[(rootIndex + 4) % 12];
+  let fifth = noteNames[(rootIndex + 7) % 12];
+  
+  if (chordName.toLowerCase().includes('m') && !chordName.toLowerCase().includes('maj')) {
+    third = noteNames[(rootIndex + 3) % 12];
+  }
+  
+  return [`${rootNote}${octave}`, `${third}${octave}`, `${fifth}${octave}`];
+}
+
+function updateApiStatus(message) {
+  document.getElementById("apiStatus").textContent = message;
+}
+
+function loadCSVFromPath(csvPath) {
+  console.log(`Attempting to load CSV from: ${csvPath}`);
+  updateLoadingStatus("Loading chords_with_notes.csv...");
+  
+  fetch(csvPath)
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return response.text();
+    })
+    .then(csvText => {
+      console.log("CSV file loaded successfully");
+      updateLoadingStatus("Parsing CSV data...");
+      
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: function(results) {
+          console.log("CSV parsed successfully:", results.data.length, "rows");
+          allChordSuggestions = [];
+          buildChordSuggestionsFromCSV(results.data);
+          filterChords();
+          if (!persistentApiSuggestions) {
+            currentPage = 0;
+            updatePaletteDisplay();
+          }
+          console.log("Created", allChordSuggestions.length, "total chord suggestions");
+          updateLoadingStatus(`Loaded ${allChordSuggestions.length} chords successfully!`);
+          
+          setTimeout(() => {
+            document.getElementById("loadingStatus").style.display = "none";
+            document.getElementById("fileInput").style.display = "block";
+          }, 2000);
+        },
+        error: function(error) {
+          console.error("Error parsing CSV:", error);
+          updateLoadingStatus("Error parsing CSV. Manual file input available.");
+          document.getElementById("fileInput").style.display = "block";
+        }
+      });
+    })
+    .catch(error => {
+      console.error("Error loading CSV file:", error);
+      updateLoadingStatus("Could not auto-load CSV. Use manual file input:");
+      document.getElementById("fileInput").style.display = "block";
+    });
+}
+
+function loadCSVFile(file) {
+  updateLoadingStatus("Loading selected CSV file...");
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    dynamicTyping: false,
+    complete: function(results) {
+      console.log("CSV parsed successfully:", results.data.length, "rows");
+      allChordSuggestions = [];
+      buildChordSuggestionsFromCSV(results.data);
+      filterChords();
+      if (!persistentApiSuggestions) {
+        currentPage = 0;
+        updatePaletteDisplay();
+      }
+      console.log("Created", allChordSuggestions.length, "total chord suggestions");
+      updateLoadingStatus(`Loaded ${allChordSuggestions.length} chords from file!`);
+    },
+    error: function(error) {
+      console.error("Error parsing CSV:", error);
+      updateLoadingStatus("Error parsing selected CSV file.");
+    }
+  });
+}
+
+function updateLoadingStatus(message) {
+  document.getElementById("loadingStatus").textContent = message;
+}
+
+function buildChordSuggestionsFromCSV(data) {
+  console.log("Building chord suggestions from CSV data...");
+  
+  for (let i = 0; i < data.length; i++) {
+    let row = data[i];
+    
+    let chordName = '';
+    let notesString = '';
+    
+    if (row['Chords']) chordName = row['Chords'].trim();
+    else if (row['Chord']) chordName = row['Chord'].trim();
+    else if (row['chord']) chordName = row['chord'].trim();
+    else if (row['CHORDS']) chordName = row['CHORDS'].trim();
+    
+    if (row['Notes_From_Degrees']) notesString = row['Notes_From_Degrees'];
+    else if (row['Notes_from_Degrees']) notesString = row['Notes_from_Degrees'];
+    else if (row['notes_from_degrees']) notesString = row['notes_from_degrees'];
+    else if (row['Notes']) notesString = row['Notes'];
+    else if (row['notes']) notesString = row['notes'];
+    
+    if (!chordName || !notesString) {
+      console.log(`Skipping row ${i}: missing chord (${chordName}) or notes (${notesString})`);
+      continue;
+    }
+    
+    let notesArray = parseNotes(notesString);
+    
+    if (notesArray.length === 0) {
+      console.log(`Skipping ${chordName}: no valid notes found in "${notesString}"`);
+      continue;
+    }
+    
+    let chordColor = color(random(80, 255), random(80, 255), random(80, 255));
+    
+    allChordSuggestions.push({
+      chord: chordName,
+      numeral: "",
+      color: chordColor,
+      notes: notesArray
+    });
+    
+    console.log(`Added chord: ${chordName} with notes: [${notesArray.join(', ')}]`);
+  }
+  
+  console.log(`Successfully loaded ${allChordSuggestions.length} chord suggestions from CSV`);
+}
+
+function filterChords() {
+  if (!searchQuery || searchQuery === "") {
+    filteredChordSuggestions = [...allChordSuggestions];
+  } else {
+    filteredChordSuggestions = allChordSuggestions.filter(chordData => {
+      let chordName = chordData.chord.toLowerCase();
+      let numeral = chordData.numeral.toLowerCase();
+      return chordName.includes(searchQuery) || numeral.includes(searchQuery);
+    });
+  }
+  
+  console.log(`Filtered ${filteredChordSuggestions.length} chords from ${allChordSuggestions.length} total`);
+}
+
+function updatePaletteDisplay() {
+  paletteBlocks = [];
+  
+  let chordsToShow;
+  // Priority: AI suggestions (if active) > filtered search results > all chords
+  if (apiSuggestionsActive && apiSuggestions.length > 0) {
+    chordsToShow = apiSuggestions;
+    console.log("Showing AI suggestions:", apiSuggestions.length);
+  } else if (searchQuery && filteredChordSuggestions.length > 0) {
+    chordsToShow = filteredChordSuggestions;
+    console.log("Showing filtered search results:", filteredChordSuggestions.length, "for query:", searchQuery);
+  } else if (filteredChordSuggestions.length > 0) {
+    chordsToShow = filteredChordSuggestions;
+    console.log("Showing all filtered chords:", filteredChordSuggestions.length);
+  } else {
+    chordsToShow = allChordSuggestions;
+    console.log("Showing all chord suggestions:", allChordSuggestions.length);
+  }
+  
+  let startIndex = currentPage * chordsPerPage;
+  let endIndex = min(startIndex + chordsPerPage, chordsToShow.length);
+  
+  for (let i = startIndex; i < endIndex; i++) {
+    let chordData = chordsToShow[i];
+    let blockIndex = i - startIndex;
+    let x = 80 + (blockIndex * 160);
+    let y = 520;
+    
+    paletteBlocks.push(new ChordBlock(
+      x, y, 
+      chordData.chord, 
+      chordData.numeral, 
+      chordData.color, 
+      1, 
+      chordData.notes
+    ));
+  }
+}
+
+function parseNotes(notesStr) {
+  if (!notesStr) return [];
+  
+  let cleanStr = String(notesStr).trim();
+  let notes = [];
+  
+  if (cleanStr.includes(',')) {
+    notes = cleanStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+  } else if (cleanStr.includes(' ')) {
+    notes = cleanStr.split(' ').map(s => s.trim()).filter(s => s.length > 0);
+  } else if (cleanStr.includes(';')) {
+    notes = cleanStr.split(';').map(s => s.trim()).filter(s => s.length > 0);
+  } else if (cleanStr.length > 0) {
+    notes = [cleanStr];
+  }
+  
+  let validNotes = [];
+  for (let note of notes) {
+    let cleanNote = note.replace(/[\[\]"']/g, '').trim();
+    if (cleanNote.match(/[A-Ga-g][#b]?[0-9]/)) {
+      validNotes.push(cleanNote);
+    } else {
+      console.log(`Invalid note format: "${cleanNote}" (original: "${note}")`);
+    }
+  }
+  
+  return validNotes;
+}
+
+function draw() {
+  background(20);
+  
+  checkHighlightedChord();
+  handleMetronome();
+  drawUI();
+
+  if (isPlaying && sortedChordBlocks.length > 0 && playIndex < sortedChordBlocks.length) {
+    let currentBlock = sortedChordBlocks[playIndex];
+    let beatDuration = Math.max(60, currentBlock.w / snapStep * framesPerBeat);
+    
+    if (frameCount - playTimer >= beatDuration) {
+      playIndex++;
+      
+      if (playIndex < sortedChordBlocks.length) {
+        let nextBlock = sortedChordBlocks[playIndex];
+        console.log(`Now playing chord ${playIndex + 1}/${sortedChordBlocks.length}: ${nextBlock.chord}`);
+        synth.releaseAll();
+        synth.triggerAttackRelease(nextBlock.notes, "2n");
+        playTimer = frameCount;
+      } else {
+        // Reached end of progression
+        if (isLooping) {
+          // Reset to beginning and continue
+          loopCount++;
+          playIndex = 0;
+          console.log(`Loop ${loopCount} - restarting progression`);
+          
+          if (sortedChordBlocks[0].notes && sortedChordBlocks[0].notes.length > 0) {
+            synth.releaseAll();
+            synth.triggerAttackRelease(sortedChordBlocks[0].notes, "2n");
+            playTimer = frameCount;
+          }
+        } else {
+          // Stop playback
+          console.log("Playback completed");
+          synth.releaseAll();
+          isPlaying = false;
+          playIndex = 0;
+          loopCount = 0;
+        }
+      }
+    }
+  }
+}
+
+function handleMetronome() {
+  if (!isMetronomeOn) return;
+  
+  if (frameCount - metronomeTimer >= framesPerBeat) {
+    beatCount++;
+    metronomeTimer = frameCount;
+    
+    // Play metronome tick - higher pitch on beat 1
+    let isDownbeat = (beatCount % 4 === 1);
+    let frequency = isDownbeat ? 1000 : 800;
+    
+    if (metronomeSound && Tone.context.state === 'running') {
+      metronomeSound.triggerAttackRelease(frequency, "32n");
+    }
+    
+    console.log("Metronome tick:", beatCount, isDownbeat ? "(downbeat)" : "");
+    
+    // Check if we're waiting for a downbeat to start playback
+    if (waitingForDownbeat && isDownbeat && playbackStartRequested) {
+      console.log("Downbeat reached - starting playback now!");
+      startPlayback();
+      waitingForDownbeat = false;
+      playbackStartRequested = false;
+    }
+  }
+}
+
+function checkHighlightedChord() {
+  highlightedBlock = null;
+  
+  if (!draggingBlock && !resizingBlock) {
+    for (let block of chordBlocks) {
+      if (block.isMouseInside()) {
+        highlightedBlock = block;
+        break;
+      }
+    }
+    
+    if (!highlightedBlock) {
+      for (let block of paletteBlocks) {
+        if (block.isMouseInside()) {
+          highlightedBlock = block;
+          break;
+        }
+      }
+    }
+  }
+  
+  if (highlightedBlock && highlightedBlock !== lastHighlightedBlock) {
+    if (highlightedBlock.notes && highlightedBlock.notes.length > 0) {
+      if (Tone.context.state !== 'running') {
+        Tone.start();
+      }
+      synth.triggerAttackRelease(highlightedBlock.notes, "8n");
+    }
+    
+    let isProgressionBlock = chordBlocks.includes(highlightedBlock);
+    if (isProgressionBlock && highlightedBlock.chord) {
+      console.log(`Fetching API suggestions for highlighted chord: ${highlightedBlock.chord}`);
+      fetchChordSuggestions(highlightedBlock.chord);
+    }
+  }
+  
+  lastHighlightedBlock = highlightedBlock;
+}
+
+function drawUI() {
+  // Top bar
+  noStroke();
+  fill(40);
+  rect(0, 0, width, 50);
+  fill(255);
+  textSize(16);
+  textAlign(LEFT, BASELINE);
+  text("Verse", 20, 35);
+
+  // Play button
+  drawPlayButton(100, 15, 60, 25);
+
+  // Chord progression area background
+  fill(60);
+  rect(20, 60, width - 40, 80);
+  fill(255);
+  textSize(14);
+  textAlign(CENTER, CENTER);
+  text("Chord Progression", 120, 75);
+
+  // Draw timeline
+  drawTimeline(gridStartX, 60, 32);
+
+  // Draw all chord blocks in the progression area
+  for (let block of chordBlocks) {
+    const isActive =
+      isPlaying &&
+      sortedChordBlocks.length > 0 &&
+      playIndex < sortedChordBlocks.length &&
+      sortedChordBlocks[playIndex] === block;
+    const isHighlighted = highlightedBlock === block;
+    block.display(isActive, isHighlighted);
+  }
+
+  // Palette area background
+  fill(30);
+  rect(0, 450, width, 200);
+  fill(200);
+  textSize(18);
+  textAlign(LEFT, BASELINE);
+  
+  if (apiSuggestionsActive && lastApiRequestChord) {
+    text(`AI Suggestions for "${lastApiRequestChord}" (score < 0.5)`, 20, 475);
+  } else {
+    text("Chord Suggestions", 20, 475);
+  }
+  
+  let chordsToShow;
+  if (apiSuggestionsActive && apiSuggestions.length > 0) {
+    chordsToShow = apiSuggestions;
+  } else if (filteredChordSuggestions.length > 0) {
+    chordsToShow = filteredChordSuggestions;
+  } else {
+    chordsToShow = allChordSuggestions;
+  }
+  
+  if (chordsToShow.length > 0) {
+    let totalPages = Math.ceil(chordsToShow.length / chordsPerPage);
+    
+    fill(150, 200, 150);
+    textSize(12);
+    let statusText = `Page ${currentPage + 1} of ${totalPages} (${chordsToShow.length} chords`;
+    
+    if (apiSuggestionsActive) {
+      statusText += " from AI, filtered by score < 0.5";
+    } else if (searchQuery && filteredChordSuggestions.length !== allChordSuggestions.length) {
+      statusText += ` filtered from ${allChordSuggestions.length} total`;
+    }
+    statusText += ")";
+    text(statusText, 20, 495);
+    
+    drawPaginationButtons(20, 500, totalPages);
+  } else {
+    fill(150, 150, 100);
+    textSize(12);
+    if (isLoadingApiSuggestions) {
+      text("Loading AI suggestions...", 20, 495);
+    } else if (searchQuery) {
+      text(`No chords found for "${searchQuery}". Try a different search term.`, 20, 495);
+    } else {
+      text("Load a CSV file to see chord suggestions", 20, 495);
+    }
+  }
+
+  // Draw palette blocks
+  for (let block of paletteBlocks) {
+    const isHighlighted = highlightedBlock === block;
+    block.display(false, isHighlighted);
+  }
+
+  // Draw dragging block if applicable
+  if (draggingBlock && isDraggingPalette) {
+    draggingBlock.display(false, false);
+  }
+  
+  // Updated instruction text to reflect the score filtering
+  if (chordBlocks.length > 0 && !apiSuggestionsActive) {
+    fill(150, 150, 200);
+    textSize(10);
+    textAlign(LEFT, BASELINE);
+    text("Hover over chord blocks above to get AI suggestions (score < 0.5). Ctrl+D to duplicate hovered chord.", 300, 495);
+  } else if (chordBlocks.length > 0 && apiSuggestionsActive) {
+    fill(150, 200, 150);
+    textSize(10);
+    textAlign(LEFT, BASELINE);
+    text("AI suggestions active (score < 0.5 filter). Use search to override. Ctrl+D to duplicate.", 300, 495);
+  }
+}
+
+function drawPaginationButtons(x, y, totalPages) {
+  let buttonWidth = 30;
+  let buttonHeight = 20;
+  let buttonSpacing = 5;
+  
+  let prevEnabled = currentPage > 0;
+  fill(prevEnabled ? 80 : 40);
+  stroke(prevEnabled ? 150 : 80);
+  strokeWeight(1);
+  rect(x, y, buttonWidth, buttonHeight, 3);
+  fill(prevEnabled ? 255 : 100);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(12);
+  text("◀", x + buttonWidth/2, y + buttonHeight/2);
+  
+  let pageX = x + buttonWidth + buttonSpacing;
+  fill(60);
+  stroke(120);
+  rect(pageX, y, 80, buttonHeight, 3);
+  fill(255);
+  noStroke();
+  text(`${currentPage + 1} / ${totalPages}`, pageX + 40, y + buttonHeight/2);
+  
+  let nextEnabled = currentPage < totalPages - 1;
+  let nextX = pageX + 80 + buttonSpacing;
+  fill(nextEnabled ? 80 : 40);
+  stroke(nextEnabled ? 150 : 80);
+  strokeWeight(1);
+  rect(nextX, y, buttonWidth, buttonHeight, 3);
+  fill(nextEnabled ? 255 : 100);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  text("▶", nextX + buttonWidth/2, y + buttonHeight/2);
+}
+
+function drawPlayButton(x, y, w, h) {
+  // Show different states based on playback status
+  let buttonColor;
+  let buttonText;
+  
+  if (waitingForDownbeat) {
+    buttonColor = color(255, 150, 0); // Orange for waiting
+    buttonText = "Waiting...";
+  } else if (isPlaying) {
+    buttonColor = color(60);
+    buttonText = "Stop";
+  } else {
+    buttonColor = color(80);
+    buttonText = "Play";
+  }
+  
+  fill(buttonColor);
+  stroke(255);
+  strokeWeight(1);
+  rect(x, y, w, h, 5);
+  fill(255);
+  noStroke();
+  textSize(14);
+  textAlign(CENTER, CENTER);
+  text(buttonText, x + w / 2, y + h / 2);
+  
+  if (isPlaying && sortedChordBlocks.length > 0) {
+    fill(255, 150);
+    textSize(10);
+    let progressText = `${playIndex + 1}/${sortedChordBlocks.length}`;
+    if (isLooping && loopCount > 0) {
+      progressText += ` (Loop ${loopCount})`;
+    }
+    text(progressText, x + w / 2, y + h + 15);
+  } else if (waitingForDownbeat) {
+    fill(255, 200, 0, 150);
+    textSize(10);
+    text("Next beat", x + w / 2, y + h + 15);
+  }
+  
+  // Draw metronome indicator if active
+  if (isMetronomeOn) {
+    let pulse = sin(frameCount * 0.3) * 0.5 + 0.5;
+    fill(100, 255, 100, 100 + pulse * 100);
+    noStroke();
+    ellipse(x + w + 15, y + h/2, 8, 8);
+    
+    fill(255);
+    textSize(8);
+    textAlign(LEFT, CENTER);
+    text(`${bpm}`, x + w + 25, y + h/2);
+  }
+  
+  // Draw loop indicator if active
+  if (isLooping) {
+    let pulse = sin(frameCount * 0.2) * 0.5 + 0.5;
+    fill(100, 150, 255, 100 + pulse * 100);
+    noStroke();
+    ellipse(x + w + 40, y + h/2, 8, 8);
+    
+    fill(255);
+    textSize(8);
+    textAlign(LEFT, CENTER);
+    text("LOOP", x + w + 50, y + h/2);
+  }
+}
+
+function drawTimeline(startX, y, steps) {
+  stroke(100);
+  strokeWeight(1);
+  for (let i = 0; i < steps; i++) {
+    let x = startX + i * snapStep;
+    line(x, y, x, y - 10);
+    noStroke();
+    fill(150);
+    textAlign(CENTER, BASELINE);
+    textSize(10);
+    if (i % 2 === 0) text((i / 2 + 1), x, y - 15);
+    stroke(100);
+  }
+  noStroke();
+}
+
+class ChordBlock {
+  constructor(x, y, chord, numeral, col, lengthInGrids = 1, notes = [], score = undefined) {
+    this.x = x;
+    this.y = y;
+    this.w = gridSpacing * lengthInGrids;
+    this.h = 50;
+    this.chord = chord;
+    this.numeral = numeral;
+    this.col = col;
+    this.notes = notes;
+    this.score = score;
+  }
+
+  display(isGlowing = false, isHighlighted = false) {
+    if (isHighlighted) {
+      let pulse = sin(frameCount * 0.2) * 0.3 + 0.7;
+      stroke(255, 200 * pulse);
+      strokeWeight(2);
+      let highlightColor = lerpColor(this.col, color(255), 0.3);
+      fill(highlightColor);
+    } else if (isGlowing) {
+      let glow = sin(frameCount * 0.3) * 100 + 155;
+      stroke(255, glow);
+      strokeWeight(3);
+      fill(this.col);
+    } else {
+      stroke(255, 100);
+      strokeWeight(1);
+      fill(this.col);
+    }
+
+    rect(this.x, this.y, this.w, this.h, 8);
+
+    if (!isGlowing && !isHighlighted) {
+      fill(255, 100);
+      noStroke();
+      rect(this.x, this.y, resizeMargin, this.h, 8, 0, 0, 8);
+      rect(this.x + this.w - resizeMargin, this.y, resizeMargin, this.h, 0, 8, 8, 0);
+    }
+
+    fill(255);
+    noStroke();
+    textSize(16);
+    textAlign(CENTER, CENTER);
+    text(this.chord, this.x + this.w / 2, this.y + this.h / 2 - 5);
+
+    if (this.numeral) {
+      textSize(10);
+      fill(255, 150);
+      text(this.numeral, this.x + this.w / 2, this.y + this.h / 2 + 10);
+    }
+
+    if (this.notes && this.notes.length > 0) {
+      fill(255, 120);
+      textSize(8);
+      let notesPreview = this.notes.slice(0, 3).join(', ');
+      if (this.notes.length > 3) notesPreview += '...';
+      text(`${this.notes.length} notes: ${notesPreview}`, this.x + this.w / 2, this.y - 8);
+    }
+    
+    // Display score if available (for API suggestions)
+    if (this.score !== undefined && this.score !== null) {
+      fill(255, 150);
+      textSize(7);
+      text(`score: ${this.score.toFixed(3)}`, this.x + this.w / 2, this.y + this.h + 8);
+    }
+    
+    if (isHighlighted && this.notes && this.notes.length > 0) {
+      fill(255, 200);
+      textSize(8);
+      text("♪ Playing chord", this.x + this.w / 2, this.y + this.h + 18);
+    }
+  }
+
+  isMouseInside() {
+    return mouseX > this.x && mouseX < this.x + this.w &&
+           mouseY > this.y && mouseY < this.y + this.h;
+  }
+
+  isMouseOnLeftEdge() {
+    return mouseX > this.x && mouseX < this.x + resizeMargin &&
+           mouseY > this.y && mouseY < this.y + this.h;
+  }
+
+  isMouseOnRightEdge() {
+    return mouseX > this.x + this.w - resizeMargin &&
+           mouseX < this.x + this.w &&
+           mouseY > this.y && mouseY < this.y + this.h;
+  }
+
+  cloneAt(x, y) {
+    return new ChordBlock(x, y, this.chord, this.numeral, this.col, this.w / gridSpacing, [...this.notes], this.score);
+  }
+
+  snapToGrid() {
+    this.x = round((this.x - gridStartX) / snapStep) * snapStep + gridStartX;
+    this.w = round(this.w / snapStep) * snapStep;
+    this.w = max(this.w, minGridUnits * snapStep);
+  }
+}
+
+function isOverlapping(a, b) {
+  return !(a.x + a.w <= b.x || a.x >= b.x + b.w);
+}
+
+function startPlayback() {
+  sortedChordBlocks = chordBlocks
+    .filter(b => b.y === timelineY && b.notes && b.notes.length > 0)
+    .slice()
+    .sort((a, b) => a.x - b.x);
+  
+  if (sortedChordBlocks.length > 0) {
+    let loopText = isLooping ? " (Loop mode enabled)" : "";
+    console.log(`Starting playback with ${sortedChordBlocks.length} chords${loopText}:`);
+    for (let i = 0; i < sortedChordBlocks.length; i++) {
+      let block = sortedChordBlocks[i];
+      console.log(`  ${i + 1}. ${block.chord} at position ${block.x} - [${block.notes.join(', ')}]`);
+    }
+    
+    playIndex = 0;
+    playTimer = frameCount;
+    isPlaying = true;
+    loopCount = 0; // Reset loop counter at start
+    
+    console.log("Playing first chord immediately");
+    if (sortedChordBlocks[0].notes && sortedChordBlocks[0].notes.length > 0) {
+      synth.triggerAttackRelease(sortedChordBlocks[0].notes, "1n");
+    }
+  } else {
+    console.log("No valid chords to play - check if chords are in timeline area");
+  }
+}
+
+function handlePlayButtonPress() {
+  if (isPlaying || waitingForDownbeat) {
+    // Stop playback or cancel waiting
+    console.log("Stopping playback or cancelling wait");
+    synth.releaseAll();
+    isPlaying = false;
+    waitingForDownbeat = false;
+    playbackStartRequested = false;
+    playIndex = 0;
+    loopCount = 0; // Reset loop counter when stopping
+  } else {
+    // Start playback logic
+    if (isMetronomeOn) {
+      // If metronome is on, wait for the next downbeat
+      console.log("Metronome is on - waiting for next downbeat to start playback");
+      waitingForDownbeat = true;
+      playbackStartRequested = true;
+    } else {
+      // If metronome is off, start immediately
+      console.log("Metronome is off - starting playback immediately");
+      startPlayback();
+    }
+  }
+}
+
+function mousePressed() {
+  // Play button
+  if (mouseX > 100 && mouseX < 160 && mouseY > 15 && mouseY < 40) {
+    if (Tone.context.state !== 'running') {
+      Tone.start().then(() => {
+        handlePlayButtonPress();
+      });
+    } else {
+      handlePlayButtonPress();
+    }
+    return;
+  }
+
+  // Pagination buttons
+  let chordsToShow;
+  if (apiSuggestionsActive && apiSuggestions.length > 0) {
+    chordsToShow = apiSuggestions;
+  } else if (filteredChordSuggestions.length > 0) {
+    chordsToShow = filteredChordSuggestions;
+  } else {
+    chordsToShow = allChordSuggestions;
+  }
+  
+  if (chordsToShow.length > 0) {
+    let totalPages = Math.ceil(chordsToShow.length / chordsPerPage);
+    let buttonY = 500;
+    let buttonHeight = 20;
+    let buttonWidth = 30;
+    let buttonSpacing = 5;
+    
+    // Previous button
+    if (mouseX >= 20 && mouseX <= 20 + buttonWidth && 
+        mouseY >= buttonY && mouseY <= buttonY + buttonHeight && 
+        currentPage > 0) {
+      currentPage--;
+      updatePaletteDisplay();
+      return;
+    }
+    
+    // Next button
+    let nextX = 20 + buttonWidth + buttonSpacing + 80 + buttonSpacing;
+    if (mouseX >= nextX && mouseX <= nextX + buttonWidth && 
+        mouseY >= buttonY && mouseY <= buttonY + buttonHeight && 
+        currentPage < totalPages - 1) {
+      currentPage++;
+      updatePaletteDisplay();
+      return;
+    }
+  }
+
+  // Check for resize handles on chord blocks
+  for (let block of chordBlocks) {
+    if (block.isMouseOnLeftEdge()) {
+      resizingBlock = block;
+      resizingSide = "left";
+      return;
+    }
+    if (block.isMouseOnRightEdge()) {
+      resizingBlock = block;
+      resizingSide = "right";
+      return;
+    }
+  }
+
+  // Check for dragging from palette
+  for (let block of paletteBlocks) {
+    if (block.isMouseInside()) {
+      draggingBlock = block.cloneAt(block.x, block.y);
+      isDraggingPalette = true;
+      offsetX = mouseX - block.x;
+      offsetY = mouseY - block.y;
+      return;
+    }
+  }
+
+  // Check for dragging existing chord blocks
+  for (let block of chordBlocks) {
+    if (block.isMouseInside()) {
+      draggingBlock = block;
+      isDraggingPalette = false;
+      offsetX = mouseX - block.x;
+      offsetY = mouseY - block.y;
+      draggingBlock.originalX = block.x;
+      draggingBlock.originalY = block.y;
+      return;
+    }
+  }
+}
+
+function mouseDragged() {
+  if (resizingBlock) {
+    if (resizingSide === "right") {
+      let newW = mouseX - resizingBlock.x;
+      resizingBlock.w = max(round(newW / snapStep) * snapStep, snapStep * minGridUnits);
+    } else if (resizingSide === "left") {
+      let oldRight = resizingBlock.x + resizingBlock.w;
+      let newX = round((mouseX - gridStartX) / snapStep) * snapStep + gridStartX;
+      newX = min(newX, oldRight - snapStep * minGridUnits);
+      let newW = oldRight - newX;
+      resizingBlock.x = newX;
+      resizingBlock.w = newW;
+    }
+    return;
+  }
+
+  if (!draggingBlock) return;
+
+  if (isDraggingPalette) {
+    draggingBlock.x = mouseX - offsetX;
+    draggingBlock.y = mouseY - offsetY;
+    return;
+  }
+
+  let snappedX = round((mouseX - offsetX - gridStartX) / snapStep) * snapStep + gridStartX;
+  snappedX = constrain(snappedX, gridStartX, width - draggingBlock.w);
+  draggingBlock.x = snappedX;
+  draggingBlock.y = timelineY;
+}
+
+function mouseReleased() {
+  if (resizingBlock) {
+    resizingBlock.snapToGrid();
+    resizingBlock = null;
+    resizingSide = null;
+    return;
+  }
+
+  if (!draggingBlock) return;
+
+  draggingBlock.snapToGrid();
+
+  let hasOverlap = chordBlocks.some(block => {
+    return block !== draggingBlock &&
+           block.y === timelineY &&
+           isOverlapping(block, draggingBlock);
+  });
+
+  if (hasOverlap) {
+    if (!isDraggingPalette) {
+      draggingBlock.x = draggingBlock.originalX;
+      draggingBlock.y = draggingBlock.originalY;
+    }
+  } else {
+    if (isDraggingPalette && draggingBlock.y < 450) {
+      draggingBlock.y = timelineY;
+      chordBlocks.push(draggingBlock);
+    }
+  }
+
+  draggingBlock = null;
+  isDraggingPalette = false;
+}
+
+function doubleClicked() {
+  for (let i = chordBlocks.length - 1; i >= 0; i--) {
+    if (chordBlocks[i].isMouseInside()) {
+      chordBlocks.splice(i, 1);
+      break;
+    }
+  }
+}
+
+function keyPressed() {
+  // Ctrl+D or Cmd+D to duplicate selected chord
+  if ((keyCode === 68) && (keyIsDown(CONTROL) || keyIsDown(91))) { // 91 is Cmd key on Mac
+    duplicateHoveredChord();
+    return false; // Prevent default browser behavior
+  }
+}
+
+function duplicateHoveredChord() {
+  // Find the chord block that the mouse is currently over
+  let targetBlock = null;
+  for (let block of chordBlocks) {
+    if (block.isMouseInside()) {
+      targetBlock = block;
+      break;
+    }
+  }
+  
+  if (!targetBlock) {
+    console.log("No chord to duplicate - hover over a chord and try again");
+    return;
+  }
+  
+  // Find a suitable position to place the duplicate
+  let duplicateX = targetBlock.x + targetBlock.w + snapStep; // Place it right after the original
+  
+  // Make sure the duplicate doesn't go off screen
+  if (duplicateX + targetBlock.w > width - 40) {
+    duplicateX = targetBlock.x - targetBlock.w - snapStep; // Place it before the original
+  }
+  
+  // If that would go off the left side, place it at a default position
+  if (duplicateX < gridStartX) {
+    duplicateX = gridStartX;
+    // Find the rightmost chord to place after it
+    let rightmostX = gridStartX;
+    for (let block of chordBlocks) {
+      if (block.y === timelineY) {
+        rightmostX = Math.max(rightmostX, block.x + block.w);
+      }
+    }
+    duplicateX = rightmostX + snapStep;
+    
+    // If that goes off screen, place at start
+    if (duplicateX + targetBlock.w > width - 40) {
+      duplicateX = gridStartX;
+    }
+  }
+  
+  // Check for overlaps and adjust position if needed
+  let attempts = 0;
+  let maxAttempts = 20;
+  while (attempts < maxAttempts) {
+    let hasOverlap = false;
+    let testBlock = { x: duplicateX, y: timelineY, w: targetBlock.w };
+    
+    for (let block of chordBlocks) {
+      if (block.y === timelineY && isOverlapping(block, testBlock)) {
+        hasOverlap = true;
+        break;
+      }
+    }
+    
+    if (!hasOverlap) {
+      break; // Found a good position
+    }
+    
+    // Try next position
+    duplicateX += snapStep;
+    if (duplicateX + targetBlock.w > width - 40) {
+      duplicateX = gridStartX; // Wrap around
+    }
+    attempts++;
+  }
+  
+  if (attempts >= maxAttempts) {
+    console.log("Could not find space to duplicate chord - try removing some chords first");
+    return;
+  }
+  
+  // Create the duplicate
+  let duplicate = new ChordBlock(
+    duplicateX,
+    timelineY,
+    targetBlock.chord,
+    targetBlock.numeral,
+    targetBlock.col,
+    targetBlock.w / gridSpacing,
+    [...targetBlock.notes], // Copy the notes array
+    targetBlock.score
+  );
+  
+  chordBlocks.push(duplicate);
+  console.log(`Duplicated chord ${targetBlock.chord} at position ${duplicateX}`);
+  
+  // Give visual feedback by briefly highlighting the duplicate
+  setTimeout(() => {
+    // This will be handled by the visual feedback in the draw loop
+  }, 100);
+}
+</script>
+
+</body>
+</html>
